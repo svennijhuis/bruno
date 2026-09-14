@@ -8,6 +8,10 @@ const _mockedCodemirror = {
   showHint: jest.fn(),
   on: jest.fn(),
   off: jest.fn(),
+  focus: jest.fn(),
+  hasFocus: jest.fn(() => false),
+  getWrapperElement: jest.fn(() => document.createElement('div')),
+  getInputField: jest.fn(() => document.createElement('textarea')),
   state: {}
 };
 
@@ -16,10 +20,7 @@ jest.mock('codemirror', () => {
 });
 
 // Import the functions to test
-import {
-  getAutoCompleteHints,
-  setupAutoComplete
-} from './autocomplete';
+import { getAutoCompleteHints, setupAutoComplete } from './autocomplete';
 
 describe('Bruno Autocomplete', () => {
   let mockedCodemirror;
@@ -64,11 +65,7 @@ describe('Bruno Autocomplete', () => {
           showHintsFor: ['variables']
         });
 
-        expect(result.list).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ displayText: '$randomInt' })
-          ])
-        );
+        expect(result.list).toEqual(expect.arrayContaining([expect.objectContaining({ displayText: '$randomInt' })]));
       });
 
       it('should handle process environment variables', () => {
@@ -89,11 +86,7 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ displayText: 'NODE_ENV' })
-          ])
-        );
+        expect(result.list).toEqual(expect.arrayContaining([expect.objectContaining({ displayText: 'NODE_ENV' })]));
       });
 
       it('should skip special internal keys', () => {
@@ -111,15 +104,9 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ displayText: 'path' })
-          ])
-        );
+        expect(result.list).toEqual(expect.arrayContaining([expect.objectContaining({ displayText: 'path' })]));
         expect(result.list).not.toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ displayText: 'pathParams' })
-          ])
+          expect.arrayContaining([expect.objectContaining({ displayText: 'pathParams' })])
         );
       });
 
@@ -219,11 +206,7 @@ describe('Bruno Autocomplete', () => {
 
         expect(result).toBeTruthy();
         expect(result.list).toEqual(
-          expect.arrayContaining([
-            'setNextRequest(requestName)',
-            'skipRequest()',
-            'stopExecution()'
-          ])
+          expect.arrayContaining(['setNextRequest(requestName)', 'skipRequest()', 'stopExecution()'])
         );
       });
     });
@@ -241,9 +224,7 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining(['Content-Type', 'Content-Encoding', 'Content-Length'])
-        );
+        expect(result.list).toEqual(expect.arrayContaining(['Content-Type', 'Content-Encoding', 'Content-Length']));
       });
 
       it('should handle progressive hints for custom hints', () => {
@@ -258,9 +239,7 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining(['string', 'array'])
-        );
+        expect(result.list).toEqual(expect.arrayContaining(['string', 'array']));
       });
     });
 
@@ -283,9 +262,7 @@ describe('Bruno Autocomplete', () => {
         const result = getAutoCompleteHints(mockedCodemirror, {}, [], options);
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining(['url', 'method'])
-        );
+        expect(result.list).toEqual(expect.arrayContaining(['url', 'method']));
       });
 
       it('should filter variables based on showHintsFor', () => {
@@ -334,9 +311,7 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        const displayTexts = result.list.map((item) =>
-          typeof item === 'object' ? item.displayText : item
-        );
+        const displayTexts = result.list.map((item) => (typeof item === 'object' ? item.displayText : item));
 
         const userVars = displayTexts.filter((text) => !text.startsWith('$'));
         expect(userVars).toEqual(['apple', 'banana', 'zebra']);
@@ -377,9 +352,7 @@ describe('Bruno Autocomplete', () => {
         });
 
         expect(result).toBeTruthy();
-        expect(result.list).toEqual(
-          expect.arrayContaining(['getHeader(name)', 'getHeaders()'])
-        );
+        expect(result.list).toEqual(expect.arrayContaining(['getHeader(name)', 'getHeaders()']));
       });
 
       it('should handle case-insensitive matching', () => {
@@ -408,7 +381,7 @@ describe('Bruno Autocomplete', () => {
     let cleanupFn;
 
     beforeEach(() => {
-      mockGetAllVariables = jest.fn(() => ({ }));
+      mockGetAllVariables = jest.fn(() => ({}));
       mockedCodemirror.state = {};
     });
 
@@ -508,8 +481,31 @@ describe('Bruno Autocomplete', () => {
 
         expect(mockedCodemirror.showHint).toHaveBeenCalledWith({
           hint: expect.any(Function),
-          completeSingle: false
+          completeSingle: false,
+          closeOnUnfocus: false
         });
+      });
+
+      it('still shows hints after Ctrl+V keyup so paste plus autocomplete keep working', () => {
+        const options = {
+          getAllVariables: mockGetAllVariables,
+          showHintsFor: ['req']
+        };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const keyupHandler = mockedCodemirror.on.mock.calls.find((call) => call[0] === 'keyup')[1];
+
+        mockedCodemirror.getCursor.mockReturnValue({ line: 0, ch: 4 });
+        mockedCodemirror.getLine.mockReturnValue('req.');
+        mockedCodemirror.getRange.mockReturnValue('req.');
+
+        keyupHandler(mockedCodemirror, { key: 'v', ctrlKey: true });
+
+        expect(mockedCodemirror.showHint).toHaveBeenCalled();
+        expect(mockedCodemirror.showHint).toHaveBeenCalledWith(
+          expect.objectContaining({
+            closeOnUnfocus: false
+          })
+        );
       });
     });
 
@@ -523,7 +519,7 @@ describe('Bruno Autocomplete', () => {
 
         expect(mockedCodemirror.on).toHaveBeenCalledWith('keyup', expect.any(Function));
         expect(mockedCodemirror.on).toHaveBeenCalledWith('mousedown', expect.any(Function));
-        expect(mockedCodemirror.on).toHaveBeenCalledTimes(2);
+        expect(mockedCodemirror.on).toHaveBeenCalledWith('blur', expect.any(Function));
       });
 
       it('should not setup mousedown event listener when showHintsOnClick is disabled', () => {
@@ -534,7 +530,8 @@ describe('Bruno Autocomplete', () => {
         cleanupFn = setupAutoComplete(mockedCodemirror, options);
 
         expect(mockedCodemirror.on).toHaveBeenCalledWith('keyup', expect.any(Function));
-        expect(mockedCodemirror.on).toHaveBeenCalledTimes(1);
+        expect(mockedCodemirror.on).toHaveBeenCalledWith('blur', expect.any(Function));
+        expect(mockedCodemirror.on.mock.calls.filter((call) => call[0] === 'mousedown')).toHaveLength(0);
       });
 
       it('should not setup mousedown event listener when showHintsOnClick is undefined', () => {
@@ -544,7 +541,8 @@ describe('Bruno Autocomplete', () => {
         cleanupFn = setupAutoComplete(mockedCodemirror, options);
 
         expect(mockedCodemirror.on).toHaveBeenCalledWith('keyup', expect.any(Function));
-        expect(mockedCodemirror.on).toHaveBeenCalledTimes(1);
+        expect(mockedCodemirror.on).toHaveBeenCalledWith('blur', expect.any(Function));
+        expect(mockedCodemirror.on.mock.calls.filter((call) => call[0] === 'mousedown')).toHaveLength(0);
       });
 
       it('should show hints on click when showHintsOnClick is enabled', () => {
@@ -599,10 +597,10 @@ describe('Bruno Autocomplete', () => {
 
         expect(mockedCodemirror.off).toHaveBeenCalledWith('keyup', expect.any(Function));
         expect(mockedCodemirror.off).toHaveBeenCalledWith('mousedown', expect.any(Function));
-        expect(mockedCodemirror.off).toHaveBeenCalledTimes(2);
+        expect(mockedCodemirror.off).toHaveBeenCalledWith('blur', expect.any(Function));
       });
 
-      it('should only cleanup keyup event listener when showHintsOnClick was disabled', () => {
+      it('should cleanup keyup and blur listeners when showHintsOnClick was disabled', () => {
         const options = {
           getAllVariables: mockGetAllVariables,
           showHintsOnClick: false
@@ -612,7 +610,8 @@ describe('Bruno Autocomplete', () => {
         cleanupFn();
 
         expect(mockedCodemirror.off).toHaveBeenCalledWith('keyup', expect.any(Function));
-        expect(mockedCodemirror.off).toHaveBeenCalledTimes(1);
+        expect(mockedCodemirror.off).toHaveBeenCalledWith('blur', expect.any(Function));
+        expect(mockedCodemirror.off.mock.calls.filter((call) => call[0] === 'mousedown')).toHaveLength(0);
       });
 
       it('should show all available hints on click based on showHintsFor configuration', () => {
@@ -643,7 +642,8 @@ describe('Bruno Autocomplete', () => {
 
         expect(mockedCodemirror.showHint).toHaveBeenCalledWith({
           hint: expect.any(Function),
-          completeSingle: false
+          completeSingle: false,
+          closeOnUnfocus: false
         });
 
         // Verify the hint function returns the expected structure
@@ -677,6 +677,121 @@ describe('Bruno Autocomplete', () => {
         clickHandler(mockedCodemirror);
 
         expect(mockedCodemirror.showHint).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('Win+V / OS overlay focus handling', () => {
+      // Win+V (Windows clipboard history) cannot be e2e'd on Linux CI.
+      // These unit tests cover blur discrimination, click-away dismiss, and focus restore.
+      let hasFocusSpy;
+      let editorWrapper;
+      let documentMouseDownHandler;
+      let windowFocusHandler;
+
+      const getHandler = (emitter, eventName) => {
+        return emitter.mock.calls.find((call) => call[0] === eventName)?.[1];
+      };
+
+      beforeEach(() => {
+        editorWrapper = document.createElement('div');
+        mockedCodemirror.getWrapperElement.mockReturnValue(editorWrapper);
+        mockedCodemirror.focus.mockClear();
+
+        hasFocusSpy = jest.spyOn(document, 'hasFocus').mockReturnValue(true);
+        const originalAdd = document.addEventListener.bind(document);
+        const originalWindowAdd = window.addEventListener.bind(window);
+        jest.spyOn(document, 'addEventListener').mockImplementation((event, handler, options) => {
+          if (event === 'mousedown') {
+            documentMouseDownHandler = handler;
+          }
+          return originalAdd(event, handler, options);
+        });
+        jest.spyOn(window, 'addEventListener').mockImplementation((event, handler, options) => {
+          if (event === 'focus') {
+            windowFocusHandler = handler;
+          }
+          return originalWindowAdd(event, handler, options);
+        });
+      });
+
+      afterEach(() => {
+        hasFocusSpy.mockRestore();
+        jest.restoreAllMocks();
+        document.querySelectorAll('.CodeMirror-hints').forEach((node) => node.remove());
+      });
+
+      it('does not close hints on OS overlay blur when document.hasFocus() is false', () => {
+        const options = { getAllVariables: mockGetAllVariables };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const blurHandler = getHandler(mockedCodemirror.on, 'blur');
+        const mockCompletion = { close: jest.fn() };
+        mockedCodemirror.state.completionActive = mockCompletion;
+
+        hasFocusSpy.mockReturnValue(false);
+        blurHandler(mockedCodemirror, { relatedTarget: null });
+
+        expect(mockCompletion.close).not.toHaveBeenCalled();
+      });
+
+      it('closes hints on in-app blur to another control', () => {
+        const options = { getAllVariables: mockGetAllVariables };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const blurHandler = getHandler(mockedCodemirror.on, 'blur');
+        const mockCompletion = { close: jest.fn() };
+        mockedCodemirror.state.completionActive = mockCompletion;
+
+        const otherInput = document.createElement('input');
+        document.body.appendChild(otherInput);
+        hasFocusSpy.mockReturnValue(true);
+        blurHandler(mockedCodemirror, { relatedTarget: otherInput });
+
+        expect(mockCompletion.close).toHaveBeenCalled();
+        otherInput.remove();
+      });
+
+      it('closes hints on in-app mousedown outside the editor and hint widget', () => {
+        const options = { getAllVariables: mockGetAllVariables };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const mockCompletion = { close: jest.fn() };
+        mockedCodemirror.state.completionActive = mockCompletion;
+
+        documentMouseDownHandler({ target: document.body });
+
+        expect(mockCompletion.close).toHaveBeenCalled();
+      });
+
+      it('does not close hints on mousedown inside the hint widget', () => {
+        const options = { getAllVariables: mockGetAllVariables };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const mockCompletion = { close: jest.fn() };
+        mockedCodemirror.state.completionActive = mockCompletion;
+
+        const hints = document.createElement('ul');
+        hints.className = 'CodeMirror-hints';
+        const item = document.createElement('li');
+        hints.appendChild(item);
+        document.body.appendChild(hints);
+
+        documentMouseDownHandler({ target: item });
+
+        expect(mockCompletion.close).not.toHaveBeenCalled();
+      });
+
+      it('restores editor focus when the window refocuses after OS overlay blur', () => {
+        const options = { getAllVariables: mockGetAllVariables };
+        cleanupFn = setupAutoComplete(mockedCodemirror, options);
+        const blurHandler = getHandler(mockedCodemirror.on, 'blur');
+        const mockCompletion = { close: jest.fn() };
+        mockedCodemirror.state.completionActive = mockCompletion;
+
+        hasFocusSpy.mockReturnValue(false);
+        blurHandler(mockedCodemirror, { relatedTarget: null });
+
+        hasFocusSpy.mockReturnValue(true);
+        windowFocusHandler();
+
+        expect(mockedCodemirror.focus).toHaveBeenCalled();
+        expect(mockCompletion.close).not.toHaveBeenCalled();
       });
     });
   });

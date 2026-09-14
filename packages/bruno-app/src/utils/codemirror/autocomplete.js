@@ -1,6 +1,17 @@
 import { mockDataFunctions } from '@usebruno/common';
+import { hasInAppBlurTarget, isOsOverlayBlur } from './osOverlayFocus';
 
 const CodeMirror = require('codemirror');
+
+// GraphQL QueryEditor already uses closeOnUnfocus: false. Variable autocomplete
+// must too: Win+V (clipboard history) blurs the editor and would otherwise
+// dismiss the {{ }} hint before the synthetic paste lands.
+const SHOW_HINT_DISPLAY_OPTIONS = {
+  completeSingle: false,
+  closeOnUnfocus: false
+};
+
+const CODEMIRROR_HINTS_SELECTOR = '.CodeMirror-hints';
 
 // Static API hints - Bruno JavaScript API (subgrouped by category)
 const STATIC_API_HINTS = {
@@ -406,9 +417,10 @@ const extractNextSegmentSuggestions = (filteredHints, currentInput) => {
       const lastDotInInput = currentInput.lastIndexOf('.');
       const currentSegmentStart = lastDotInInput + 1;
       const nextDotAfterInput = hint.indexOf('.', currentSegmentStart);
-      const segment = nextDotAfterInput === -1
-        ? hint.substring(currentSegmentStart)
-        : hint.substring(currentSegmentStart, nextDotAfterInput);
+      const segment =
+        nextDotAfterInput === -1
+          ? hint.substring(currentSegmentStart)
+          : hint.substring(currentSegmentStart, nextDotAfterInput);
       suggestions.add(segment);
     }
   });
@@ -602,7 +614,7 @@ const handleClickForAutocomplete = (cm, options) => {
         from: cursor,
         to: cursor
       }),
-      completeSingle: false
+      ...SHOW_HINT_DISPLAY_OPTIONS
     });
   }, 0);
 };
@@ -632,8 +644,32 @@ const handleKeyupForAutocomplete = (cm, event, options) => {
 
   cm.showHint({
     hint: () => hints,
-    completeSingle: false
+    ...SHOW_HINT_DISPLAY_OPTIONS
   });
+};
+
+const closeActiveCompletion = (editor) => {
+  if (editor.state?.completionActive) {
+    editor.state.completionActive.close();
+  }
+};
+
+const isTargetInsideEditorOrHints = (editor, target) => {
+  if (!target) {
+    return false;
+  }
+
+  const wrapper = editor.getWrapperElement?.();
+  if (wrapper && wrapper.contains(target)) {
+    return true;
+  }
+
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const hints = document.querySelector(CODEMIRROR_HINTS_SELECTOR);
+  return Boolean(hints && hints.contains(target));
 };
 
 /**
@@ -646,6 +682,8 @@ export const setupAutoComplete = (editor, options = {}) => {
   if (!editor) {
     return;
   }
+
+  let restoreEditorFocusOnWindowFocus = false;
 
   const keyupHandler = (cm, event) => {
     handleKeyupForAutocomplete(cm, event, options);
@@ -665,11 +703,64 @@ export const setupAutoComplete = (editor, options = {}) => {
     editor.on('mousedown', clickHandler);
   }
 
+  const markEditorForFocusRestore = () => {
+    restoreEditorFocusOnWindowFocus = true;
+  };
+
+  const onEditorBlur = (_cm, event) => {
+    const osOverlay = isOsOverlayBlur();
+    if (osOverlay || !hasInAppBlurTarget(event)) {
+      if (osOverlay) {
+        markEditorForFocusRestore();
+      }
+      return;
+    }
+
+    if (isTargetInsideEditorOrHints(editor, event.relatedTarget)) {
+      return;
+    }
+
+    closeActiveCompletion(editor);
+  };
+
+  const onDocumentMouseDown = (event) => {
+    if (!editor.state?.completionActive) {
+      return;
+    }
+    if (isTargetInsideEditorOrHints(editor, event.target)) {
+      return;
+    }
+    closeActiveCompletion(editor);
+  };
+
+  const onWindowBlur = () => {
+    if (editor.hasFocus?.() || document.activeElement === editor.getInputField?.()) {
+      markEditorForFocusRestore();
+    }
+  };
+
+  const onWindowFocus = () => {
+    if (!restoreEditorFocusOnWindowFocus) {
+      return;
+    }
+    restoreEditorFocusOnWindowFocus = false;
+    editor.focus();
+  };
+
+  editor.on('blur', onEditorBlur);
+  document.addEventListener('mousedown', onDocumentMouseDown);
+  window.addEventListener('blur', onWindowBlur);
+  window.addEventListener('focus', onWindowFocus);
+
   return () => {
     editor.off('keyup', keyupHandler);
     if (options.showHintsOnClick) {
       editor.off('mousedown', clickHandler);
     }
+    editor.off('blur', onEditorBlur);
+    document.removeEventListener('mousedown', onDocumentMouseDown);
+    window.removeEventListener('blur', onWindowBlur);
+    window.removeEventListener('focus', onWindowFocus);
   };
 };
 

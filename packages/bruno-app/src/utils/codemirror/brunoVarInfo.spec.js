@@ -1,5 +1,12 @@
 import { interpolate } from '@usebruno/common';
-import { COPY_SUCCESS_TIMEOUT, extractVariableInfo, renderVarInfo } from './brunoVarInfo';
+import {
+  COPY_SUCCESS_TIMEOUT,
+  extractVariableInfo,
+  renderVarInfo,
+  shouldScheduleVarInfoHideOnMouseOut
+} from './brunoVarInfo';
+import { getAllVariables, getVariableScope, isVariableSecret } from 'utils/collections';
+import CodeMirror from 'codemirror';
 
 // Mock the dependencies
 jest.mock('@usebruno/common', () => ({
@@ -42,19 +49,33 @@ jest.mock('utils/codemirror/autocomplete', () => ({
   setupAutoComplete: jest.fn(() => jest.fn())
 }));
 
-// Mock CodeMirror
-global.CodeMirror = jest.fn((element, options) => {
-  const mockEditor = {
-    getValue: jest.fn(() => options.value || ''),
-    setValue: jest.fn(),
-    on: jest.fn(),
-    off: jest.fn(),
-    refresh: jest.fn(),
-    focus: jest.fn(),
-    options: options || {},
-    getWrapperElement: jest.fn(() => element)
-  };
-  return mockEditor;
+jest.mock('codemirror', () => {
+  const CodeMirror = jest.fn((element, options) => {
+    const mockEditor = {
+      getValue: jest.fn(() => options.value || ''),
+      setValue: jest.fn(),
+      setOption: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+      refresh: jest.fn(),
+      focus: jest.fn(),
+      getWrapperElement: jest.fn(() => element),
+      getInputField: jest.fn(() => ({ blur: jest.fn() })),
+      getLine: jest.fn(() => options.value || ''),
+      lineCount: jest.fn(() => 1),
+      setCursor: jest.fn(),
+      getScrollInfo: jest.fn(() => ({ height: 20 })),
+      options: options || {}
+    };
+    CodeMirror.mockEditor = mockEditor;
+    return mockEditor;
+  });
+  CodeMirror.defineOption = jest.fn();
+  CodeMirror.on = jest.fn();
+  CodeMirror.off = jest.fn();
+  CodeMirror.Init = {};
+  CodeMirror.commands = {};
+  return CodeMirror;
 });
 
 describe('extractVariableInfo', () => {
@@ -350,7 +371,8 @@ describe('renderVarInfo', () => {
     if (!result) return { result: null, containerDiv: null, valueDisplay: null, copyButton: null };
 
     const containerDiv = result;
-    const valueDisplay = containerDiv.querySelector('.var-value-editable-display') || containerDiv.querySelector('.var-value-display');
+    const valueDisplay =
+      containerDiv.querySelector('.var-value-editable-display') || containerDiv.querySelector('.var-value-display');
     const copyButton = containerDiv.querySelector('.copy-button');
 
     return { result, containerDiv, valueDisplay, copyButton };
@@ -518,5 +540,97 @@ describe('renderVarInfo', () => {
       expect(warningNote).not.toBeNull();
       expect(warningNote.textContent).toContain('OAuth2 token not found');
     });
+  });
+
+  describe('Win+V / OS overlay edit mode', () => {
+    // Win+V (Windows clipboard history) cannot be e2e'd on Linux CI.
+    let hasFocusSpy;
+
+    const enterEditMode = () => {
+      interpolate.mockImplementation((value) => value ?? '');
+      getVariableScope.mockReturnValue({
+        type: 'environment',
+        value: 'test-value',
+        data: { variable: { name: 'apiKey', value: 'test-value' } }
+      });
+      getAllVariables.mockReturnValue({ apiKey: 'test-value' });
+      isVariableSecret.mockReturnValue(false);
+
+      const { containerDiv, valueDisplay } = setupRender(
+        { apiKey: 'test-value' },
+        { uid: 'col-1' },
+        { uid: 'item-1', type: 'http-request' }
+      );
+
+      valueDisplay.click();
+      jest.runAllTimers();
+
+      const editorContainer = containerDiv.querySelector('.var-value-editor');
+      const blurHandler = CodeMirror.mockEditor.on.mock.calls.find((call) => call[0] === 'blur')[1];
+
+      return { containerDiv, valueDisplay, editorContainer, blurHandler, cmEditor: CodeMirror.mockEditor };
+    };
+
+    beforeEach(() => {
+      hasFocusSpy = jest.spyOn(document, 'hasFocus').mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      hasFocusSpy.mockRestore();
+    });
+
+    it('does not exit edit mode when document.hasFocus() is false', () => {
+      const { valueDisplay, editorContainer, blurHandler } = enterEditMode();
+
+      expect(editorContainer.style.display).toBe('block');
+      expect(valueDisplay.style.display).toBe('none');
+
+      hasFocusSpy.mockReturnValue(false);
+      blurHandler();
+
+      expect(editorContainer.style.display).toBe('block');
+      expect(valueDisplay.style.display).toBe('none');
+    });
+
+    it('re-focuses the inner editor when the window regains focus after OS overlay blur', () => {
+      const { blurHandler, cmEditor } = enterEditMode();
+
+      hasFocusSpy.mockReturnValue(false);
+      blurHandler();
+
+      hasFocusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event('focus'));
+
+      expect(cmEditor.focus).toHaveBeenCalled();
+    });
+
+    it('exits edit mode on in-app blur', () => {
+      const { valueDisplay, editorContainer, blurHandler } = enterEditMode();
+
+      hasFocusSpy.mockReturnValue(true);
+      blurHandler();
+
+      expect(editorContainer.style.display).toBe('none');
+      expect(valueDisplay.style.display).toBe('block');
+    });
+  });
+});
+
+describe('shouldScheduleVarInfoHideOnMouseOut', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('does not schedule hide while the document is unfocused (OS overlay / Win+V)', () => {
+    // Win+V cannot be e2e'd on Linux CI.
+    jest.spyOn(document, 'hasFocus').mockReturnValue(false);
+
+    expect(shouldScheduleVarInfoHideOnMouseOut()).toBe(false);
+  });
+
+  it('schedules hide when the document is focused (in-app mouseout)', () => {
+    jest.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    expect(shouldScheduleVarInfoHideOnMouseOut()).toBe(true);
   });
 });

@@ -13,7 +13,15 @@ import store from 'providers/ReduxStore';
 import { defineCodeMirrorBrunoVariablesMode } from 'utils/common/codemirror';
 import { MaskedEditor } from 'utils/common/masked-editor';
 import { setupAutoComplete } from 'utils/codemirror/autocomplete';
+import { isOsOverlayBlur } from 'utils/codemirror/osOverlayFocus';
 import { variableNameRegex } from 'utils/common/regex';
+
+export const shouldScheduleVarInfoHideOnMouseOut = () => {
+  if (typeof document === 'undefined') {
+    return true;
+  }
+  return document.hasFocus();
+};
 
 let CodeMirror;
 const SERVER_RENDERED = typeof window === 'undefined' || global['PREVENT_CODEMIRROR_RENDER'] === true;
@@ -66,16 +74,16 @@ const EYE_OFF_ICON_SVG = `
 
 const getScopeLabel = (scopeType) => {
   const labels = {
-    'global': 'Global',
-    'environment': 'Environment',
-    'collection': 'Collection',
-    'folder': 'Folder',
-    'request': 'Request',
-    'runtime': 'Runtime',
+    global: 'Global',
+    environment: 'Environment',
+    collection: 'Collection',
+    folder: 'Folder',
+    request: 'Request',
+    runtime: 'Runtime',
     'process.env': 'Process Env',
-    'dynamic': 'Dynamic',
-    'oauth2': 'OAuth2',
-    'undefined': 'Undefined'
+    dynamic: 'Dynamic',
+    oauth2: 'OAuth2',
+    undefined: 'Undefined'
   };
   return labels[scopeType] || scopeType;
 };
@@ -251,7 +259,12 @@ export const renderVarInfo = (token, options) => {
   }
 
   // Check if variable is read-only (process.env, runtime, dynamic/faker, oauth2, and undefined variables cannot be edited)
-  const isReadOnly = scopeInfo.type === 'process.env' || scopeInfo.type === 'runtime' || scopeInfo.type === 'dynamic' || scopeInfo.type === 'oauth2' || scopeInfo.type === 'undefined';
+  const isReadOnly =
+    scopeInfo.type === 'process.env' ||
+    scopeInfo.type === 'runtime' ||
+    scopeInfo.type === 'dynamic' ||
+    scopeInfo.type === 'oauth2' ||
+    scopeInfo.type === 'undefined';
 
   // Get raw value from scope
   const rawValue = scopeInfo.value || '';
@@ -287,13 +300,18 @@ export const renderVarInfo = (token, options) => {
   into.appendChild(header);
 
   // Check if variable name is valid
-  const isValidVariableName = scopeInfo.type === 'process.env' || scopeInfo.type === 'dynamic' || scopeInfo.type === 'oauth2' || variableNameRegex.test(variableName);
+  const isValidVariableName =
+    scopeInfo.type === 'process.env' ||
+    scopeInfo.type === 'dynamic' ||
+    scopeInfo.type === 'oauth2' ||
+    variableNameRegex.test(variableName);
 
   // Show warning if variable name is invalid
   if (!isValidVariableName) {
     const warningNote = document.createElement('div');
     warningNote.className = 'var-warning-note';
-    warningNote.textContent = 'Invalid variable name! Variables must only contain alpha-numeric characters, "-", "_", "."';
+    warningNote.textContent =
+      'Invalid variable name! Variables must only contain alpha-numeric characters, "-", "_", "."';
     into.appendChild(warningNote);
 
     // Don't show value or any other content for invalid variable names
@@ -391,7 +409,7 @@ export const renderVarInfo = (token, options) => {
     let isEditing = false;
 
     cmEditor.setOption('extraKeys', {
-      'Enter': (cm) => {
+      Enter: (cm) => {
         // Enter: save and blur
         cm.getInputField().blur();
       },
@@ -493,8 +511,26 @@ export const renderVarInfo = (token, options) => {
       }, 0);
     });
 
+    const onWindowFocusRestoreEditor = () => {
+      if (isEditing) {
+        cmEditor.focus();
+      }
+    };
+
     // Save on blur and return to display mode
     cmEditor.on('blur', () => {
+      // Win+V / OS overlay: stay in edit mode and restore focus when the window returns.
+      if (isOsOverlayBlur()) {
+        window.addEventListener('focus', onWindowFocusRestoreEditor, { once: true });
+        valueContainer._osOverlayFocusListener = onWindowFocusRestoreEditor;
+        return;
+      }
+
+      if (valueContainer._osOverlayFocusListener) {
+        window.removeEventListener('focus', valueContainer._osOverlayFocusListener);
+        valueContainer._osOverlayFocusListener = null;
+      }
+
       const newValue = cmEditor.getValue();
 
       // Switch back to display mode
@@ -746,33 +782,36 @@ if (!SERVER_RENDERED) {
 
     const popupBox = popup.getBoundingClientRect();
     const popupStyle = popup.currentStyle || window.getComputedStyle(popup);
-    const popupWidth
-      = popupBox.right - popupBox.left + parseFloat(popupStyle.marginLeft) + parseFloat(popupStyle.marginRight);
-    const popupHeight
-      = popupBox.bottom - popupBox.top + parseFloat(popupStyle.marginTop) + parseFloat(popupStyle.marginBottom);
+    const popupWidth =
+      popupBox.right - popupBox.left + parseFloat(popupStyle.marginLeft) + parseFloat(popupStyle.marginRight);
+    const popupHeight =
+      popupBox.bottom - popupBox.top + parseFloat(popupStyle.marginTop) + parseFloat(popupStyle.marginBottom);
 
     const GAP_REM = 0.5;
     const EDGE_MARGIN_REM = 0.9375;
 
     // Position below the trigger by default with gap
-    let topPos = box.bottom + (GAP_REM * 16);
+    let topPos = box.bottom + GAP_REM * 16;
 
     // Check if there's enough space below; if not, position above
-    if (popupHeight > window.innerHeight - box.bottom - (EDGE_MARGIN_REM * 16) && box.top > window.innerHeight - box.bottom) {
-      topPos = box.top - popupHeight - (GAP_REM * 16);
+    if (
+      popupHeight > window.innerHeight - box.bottom - EDGE_MARGIN_REM * 16 &&
+      box.top > window.innerHeight - box.bottom
+    ) {
+      topPos = box.top - popupHeight - GAP_REM * 16;
     }
 
     // Ensure it doesn't go off the top of the screen
     if (topPos < 0) {
-      topPos = box.bottom + (GAP_REM * 16);
+      topPos = box.bottom + GAP_REM * 16;
     }
 
     // Horizontal positioning - align to left of trigger
     let leftPos = box.left;
 
     // Ensure it doesn't go off the right edge
-    if (leftPos + popupWidth > window.innerWidth - (EDGE_MARGIN_REM * 16)) {
-      leftPos = window.innerWidth - popupWidth - (EDGE_MARGIN_REM * 16);
+    if (leftPos + popupWidth > window.innerWidth - EDGE_MARGIN_REM * 16) {
+      leftPos = window.innerWidth - popupWidth - EDGE_MARGIN_REM * 16;
     }
 
     // Ensure it doesn't go off the left edge
@@ -791,6 +830,9 @@ if (!SERVER_RENDERED) {
     };
 
     const onMouseOut = function () {
+      if (!shouldScheduleVarInfoHideOnMouseOut()) {
+        return;
+      }
       clearTimeout(popupTimeout);
       popupTimeout = setTimeout(hidePopup, 500);
     };
@@ -804,6 +846,11 @@ if (!SERVER_RENDERED) {
       // Cleanup CodeMirror and MaskedEditor instances
       const valueContainer = popup.querySelector('.var-value-container');
       if (valueContainer) {
+        if (valueContainer._osOverlayFocusListener) {
+          window.removeEventListener('focus', valueContainer._osOverlayFocusListener);
+          valueContainer._osOverlayFocusListener = null;
+        }
+
         // Cleanup autocomplete
         if (valueContainer._autoCompleteCleanup) {
           valueContainer._autoCompleteCleanup();
